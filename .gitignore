@@ -1,5 +1,7 @@
 target/
 *.class
 .claude/
-# cache Maven scaricata dal wrapper (non va in repo)
+# project-local JDK (downloaded by setup.sh)
+.jdk/
+# Maven cache downloaded by the wrapper
 caller/.maven/

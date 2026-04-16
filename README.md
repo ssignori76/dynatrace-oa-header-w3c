@@ -1,115 +1,125 @@
 # Dynatrace OneAgent — W3C Trace Context Header Probe
 
-Progetto di test per verificare quali header HTTP vengono iniettati da **Dynatrace OneAgent** quando monitora un'applicazione Java.
+Test project to verify which HTTP headers are injected by **Dynatrace OneAgent** when monitoring a Java application.
 
-Verifica in particolare la propagazione degli header:
+Headers under test:
 - `traceparent` — W3C Trace Context standard
-- `tracestate` — W3C Trace Context standard (opzionale)
-- `x-dynatrace` — header proprietario Dynatrace (legacy)
+- `tracestate` — W3C Trace Context standard (optional)
+- `x-dynatrace` — Dynatrace proprietary legacy header
 
 ---
 
-## Architettura
+## Architecture
 
 ```
 ┌─────────────────────────────────┐        HTTP        ┌──────────────────────────┐
 │  caller (Spring Boot :8080)     │ ─────────────────► │  receiver (:9090)        │
 │                                 │                    │                          │
-│  GET /call                      │  traceparent: ...  │  stampa tutti gli header │
-│    └─► RestTemplate             │  x-dynatrace: ...  │  risponde 200 OK         │
+│  GET /call                      │  traceparent: ...  │  prints all headers      │
+│    └─► RestTemplate             │  x-dynatrace: ...  │  always returns 200 OK   │
 │         └─► Apache HttpClient   │  x-probe-ts: ...   │                          │
 │              ↑                  │                    └──────────────────────────┘
-│         OneAgent inietta qui    │
+│     OneAgent injects here       │
 └─────────────────────────────────┘
 ```
 
-**Caller**: Spring Boot con Apache HttpClient 5. OneAgent strumenta questo client e inietta gli header di trace prima dell'invio TCP.
+**Caller**: Spring Boot backed by Apache HttpClient 5. OneAgent instruments this client and injects trace headers before the TCP send. Wire-level logging is enabled so injected headers are also visible in the caller's stdout.
 
-**Receiver**: echo server minimale scritto in Java puro (nessuna dipendenza). Stampa tutti gli header ricevuti e risponde sempre `200 OK`.
+**Receiver**: minimal echo server written in plain Java (zero dependencies). Prints all incoming headers and always returns `200 OK`.
 
 ---
 
-## Prerequisiti
+## Prerequisites
 
-- Java 17+
-- Maven **non necessario** — il progetto include il Maven Wrapper (`mvnw`)
-- Dynatrace OneAgent installato sulla macchina del caller
+| Requirement | Notes |
+|---|---|
+| Java 17 | Not required on the host — `setup.sh` downloads it project-locally |
+| Maven | Not required — Maven Wrapper (`mvnw`) is included |
+| Dynatrace OneAgent | Must be installed on the **caller** machine |
+| Internet access | Required on first run to download JDK and Maven |
+
+Neither Java nor Maven need to be installed on the target machine. The project is fully self-contained.
+
+---
+
+## Setup (run once)
+
+```bash
+git clone https://github.com/ssignori76/dynatrace-oa-header-w3c.git
+cd dynatrace-oa-header-w3c
+./setup.sh
+```
+
+`setup.sh` downloads **Amazon Corretto 17** into `.jdk/` inside the project folder. It auto-detects the CPU architecture (`x86_64` / `aarch64`). The system Java is never touched.
 
 ---
 
 ## Build
 
-Il progetto usa il **Maven Wrapper**: scarica automaticamente la versione corretta di Maven al primo build, senza richiedere Maven installato sul sistema.
-
-La cache viene scaricata in `caller/.maven/` (cartella del progetto, non nella home utente) e non viene committata nel repo.
-
 ```bash
-cd caller
-./mvnw package -q
+./build.sh
 ```
 
-Produce: `caller/target/caller-1.0.0.jar`
-
-> **Nota**: al primo `./mvnw` viene scaricato Maven (~10 MB). Richiede connettività internet verso `repo.maven.apache.org`.
+Uses the project-local JDK and Maven Wrapper to produce `caller/target/caller-1.0.0.jar`.
 
 ---
 
-## Avvio
+## Run
+
+Open three terminals on the target machine.
 
 ### Terminal 1 — Receiver
 
 ```bash
-cd receiver
-java ReceiverApp.java
-# oppure su porta diversa:
-java ReceiverApp.java 9091
+./run-receiver.sh
+# or on a custom port:
+./run-receiver.sh 9091
 ```
 
-Output atteso:
+Expected output:
 ```
+Starting receiver on port 9090...
 Receiver in ascolto su porta 9090
 Endpoint: http://0.0.0.0:9090/headers
 ```
 
-### Terminal 2 — Caller (con OneAgent)
+### Terminal 2 — Caller (with OneAgent)
 
 ```bash
-cd caller
-java -javaagent:/path/to/oneagent.jar \
-     -jar target/caller-1.0.0.jar
+ONEAGENT_JAR=/path/to/oneagent.jar ./run-caller.sh
 ```
 
-La URL target è configurabile tramite variabile d'ambiente (utile nella fase 2 con API Gateway):
+To point the caller to a different receiver (e.g. an API Gateway in phase 2):
 
 ```bash
-TARGET_URL=http://receiver-host:9090/headers \
-java -javaagent:/path/to/oneagent.jar \
-     -jar target/caller-1.0.0.jar
+ONEAGENT_JAR=/path/to/oneagent.jar \
+TARGET_URL=http://api-gateway-host/headers \
+./run-caller.sh
 ```
 
-Default: `http://localhost:9090/headers`
+`TARGET_URL` defaults to `http://localhost:9090/headers`.
 
-### Terminal 3 — Esegui il test
+### Terminal 3 — Send a test request
 
 ```bash
 ./test.sh
-# oppure con host remoto:
+# or with a remote caller:
 ./test.sh caller-host 8080
 ```
 
 ---
 
-## Cosa osservare
+## What to look for
 
-### Log del receiver
+### Receiver output
 
-Il receiver stampa tutti gli header ricevuti. Con OneAgent attivo e W3C Trace Context abilitato, dovrai vedere:
+With OneAgent active and W3C Trace Context enabled, every request should show:
 
 ```
 === RICHIESTA RICEVUTA ===
 Metodo : GET
 URI    : /headers
-Da     : 192.168.1.10:54321
+Da     : 10.0.1.5:54321
 --- Header ---
   traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
   tracestate: ...
@@ -118,19 +128,17 @@ Da     : 192.168.1.10:54321
 ==========================
 ```
 
-### Log del caller (wire log)
+### Caller output — two sections
 
-Il caller stampa due sezioni:
+1. **`>>> APP-LEVEL HEADERS`** — headers added by the application before OneAgent acts. `traceparent` / `x-dynatrace` will **not** appear here.
 
-1. **`>>> APP-LEVEL HEADERS`** — header aggiunti dall'applicazione (senza OneAgent). Qui **non** si vedranno `traceparent` / `x-dynatrace`.
-
-2. **Wire log Apache HttpClient** — byte raw inviati sulla rete, **dopo** che OneAgent ha iniettato gli header:
+2. **Apache HttpClient wire log** — raw bytes sent over the wire, **after** OneAgent has injected its headers:
    ```
    >> "traceparent: 00-...-01[\r][\n]"
    >> "x-dynatrace: FW4;...[\r][\n]"
    ```
 
-### tcpdump (verifica indipendente)
+### Independent verification with tcpdump
 
 ```bash
 sudo tcpdump -i any -A 'tcp port 9090' | grep -E 'traceparent|tracestate|x-dynatrace'
@@ -140,25 +148,44 @@ sudo tcpdump -i any -A 'tcp port 9090' | grep -E 'traceparent|tracestate|x-dynat
 
 ## Troubleshooting
 
-| Sintomo | Causa probabile |
+| Symptom | Likely cause |
 |---|---|
-| Nessun `traceparent` nel receiver | W3C Trace Context non abilitato nel tenant Dynatrace |
-| Nessun `x-dynatrace` nel receiver | Header legacy disabilitato oppure il processo non è instrumentato |
-| Nessuno span outbound in Dynatrace | Apache HttpClient non strumentato nella versione OneAgent in uso |
-| Header presenti nel wire log ma non nel receiver | Proxy/LB intermedio che riscrive gli header |
+| No `traceparent` in receiver | W3C Trace Context not enabled in the Dynatrace tenant |
+| No `x-dynatrace` in receiver | Legacy header disabled or process not instrumented |
+| No outbound span in Dynatrace | Apache HttpClient not instrumented by this OneAgent version |
+| Headers in wire log but missing in receiver | Proxy or load balancer between caller and receiver stripping headers |
 
-Per verificare che il processo Java sia visto da OneAgent: controlla in Dynatrace → **Technologies** → **Java** che il processo appaia come servizio.
+To confirm the Java process is seen by OneAgent: check **Dynatrace → Technologies → Java** and verify the process appears as a service.
 
 ---
 
-## Fase 2 — Test con API Gateway
+## Phase 2 — API Gateway in the middle
 
-Per inserire un API Gateway tra caller e receiver, basta cambiare `TARGET_URL`:
+To insert an API Gateway between caller and receiver, change `TARGET_URL`:
 
 ```bash
+ONEAGENT_JAR=/path/to/oneagent.jar \
 TARGET_URL=http://api-gateway-host/headers \
-java -javaagent:/path/to/oneagent.jar \
-     -jar target/caller-1.0.0.jar
+./run-caller.sh
 ```
 
-Il receiver continua ad ascoltare su `:9090` come backend dell'API GW. Questo permette di osservare se il gateway propaga, modifica o rimuove gli header iniettati da OneAgent.
+The receiver keeps listening on `:9090` as the API GW backend. This lets you observe whether the gateway forwards, modifies, or strips the headers injected by OneAgent.
+
+---
+
+## Project structure
+
+```
+.
+├── setup.sh          # download Amazon Corretto 17 into .jdk/
+├── build.sh          # build caller JAR using project-local JDK
+├── run-receiver.sh   # start the echo receiver
+├── run-caller.sh     # start the caller (pass ONEAGENT_JAR and TARGET_URL)
+├── test.sh           # send a test request via curl
+├── caller/           # Spring Boot app (Apache HttpClient 5 + wire logging)
+│   ├── mvnw
+│   ├── pom.xml
+│   └── src/
+└── receiver/
+    └── ReceiverApp.java   # single-file echo server, no dependencies
+```
