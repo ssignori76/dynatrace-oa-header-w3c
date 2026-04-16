@@ -32,6 +32,16 @@
 set -euf
 [ "${MVNW_VERBOSE-}" != debug ] || set -x
 
+# Use project-local JDK (downloaded by setup.sh) if JAVA_HOME is not already set.
+if [ -z "${JAVA_HOME-}" ]; then
+  _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  if [ -d "${_SCRIPT_DIR}/.jdk/bin" ]; then
+    JAVA_HOME="${_SCRIPT_DIR}/.jdk"
+    export JAVA_HOME
+  fi
+  unset _SCRIPT_DIR
+fi
+
 # OS specific support.
 native_path() { printf %s\\n "$1"; }
 case "$(uname)" in
