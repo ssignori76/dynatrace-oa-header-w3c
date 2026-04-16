@@ -1,3 +1,5 @@
 target/
 *.class
 .claude/
+# cache Maven scaricata dal wrapper (non va in repo)
+caller/.maven/
