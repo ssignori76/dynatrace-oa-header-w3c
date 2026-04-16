@@ -89,15 +89,7 @@ Endpoint: http://0.0.0.0:9090/headers
 ONEAGENT_JAR=/path/to/oneagent.jar ./run-caller.sh
 ```
 
-To point the caller to a different receiver (e.g. an API Gateway in phase 2):
-
-```bash
-ONEAGENT_JAR=/path/to/oneagent.jar \
-TARGET_URL=http://api-gateway-host/headers \
-./run-caller.sh
-```
-
-`TARGET_URL` defaults to `http://localhost:9090/headers`.
+`TARGET_URL` defaults to `http://localhost:9090/headers` and can be overridden — see the [Configuring the Target Endpoint](#configuring-the-target-endpoint) section below.
 
 ### Terminal 3 — Send a test request
 
@@ -146,22 +138,42 @@ sudo tcpdump -i any -A 'tcp port 9090' | grep -E 'traceparent|tracestate|x-dynat
 
 ---
 
-## Troubleshooting
+## Configuring the Target Endpoint
 
-| Symptom | Likely cause |
-|---|---|
-| No `traceparent` in receiver | W3C Trace Context not enabled in the Dynatrace tenant |
-| No `x-dynatrace` in receiver | Legacy header disabled or process not instrumented |
-| No outbound span in Dynatrace | Apache HttpClient not instrumented by this OneAgent version |
-| Headers in wire log but missing in receiver | Proxy or load balancer between caller and receiver stripping headers |
+The URL that the caller sends requests to is controlled by the `TARGET_URL` environment variable. This makes it possible to test different scenarios without rebuilding anything.
 
-To confirm the Java process is seen by OneAgent: check **Dynatrace → Technologies → Java** and verify the process appears as a service.
+### Phase 1 — Direct call (caller → receiver)
+
+Default configuration. Receiver and caller on the same host or on two separate VMs.
+
+```
+[caller :8080] ──────────────────────────────► [receiver :9090]
+                  traceparent injected by OneAgent
+```
+
+```bash
+# same host (default)
+ONEAGENT_JAR=/path/to/oneagent.jar \
+./run-caller.sh
+
+# receiver on a separate VM
+ONEAGENT_JAR=/path/to/oneagent.jar \
+TARGET_URL=http://receiver-host:9090/headers \
+./run-caller.sh
+```
 
 ---
 
-## Phase 2 — API Gateway in the middle
+### Phase 2 — API Gateway in the middle (caller → API GW → receiver)
 
-To insert an API Gateway between caller and receiver, change `TARGET_URL`:
+Point `TARGET_URL` to the API Gateway endpoint. The receiver stays unchanged and keeps listening on `:9090` as the API GW backend.
+
+```
+[caller :8080] ──► [API Gateway] ──► [receiver :9090]
+                        ↑
+               does it forward / strip / modify
+               traceparent and x-dynatrace ?
+```
 
 ```bash
 ONEAGENT_JAR=/path/to/oneagent.jar \
@@ -169,7 +181,34 @@ TARGET_URL=http://api-gateway-host/headers \
 ./run-caller.sh
 ```
 
-The receiver keeps listening on `:9090` as the API GW backend. This lets you observe whether the gateway forwards, modifies, or strips the headers injected by OneAgent.
+**What to compare between Phase 1 and Phase 2:**
+
+| Header | Phase 1 (direct) | Phase 2 (via API GW) | Expected behaviour |
+|---|---|---|---|
+| `traceparent` | present | ? | should be forwarded unchanged |
+| `tracestate` | present | ? | should be forwarded unchanged |
+| `x-dynatrace` | present | ? | depends on API GW configuration |
+| `x-probe-ts` | present | ? | should be forwarded unchanged |
+
+If a header is visible in Phase 1 but missing in Phase 2, the API Gateway is stripping it. If the value changes, the API GW is rewriting it.
+
+**Tip — use tcpdump on the receiver host to get ground truth:**
+```bash
+sudo tcpdump -i any -A 'tcp port 9090' | grep -E 'traceparent|tracestate|x-dynatrace'
+```
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| No `traceparent` in receiver | W3C Trace Context not enabled in the Dynatrace tenant |
+| No `x-dynatrace` in receiver | Legacy header disabled or process not instrumented |
+| No outbound span in Dynatrace | Apache HttpClient not instrumented by this OneAgent version |
+| Headers in wire log but missing in receiver | Proxy or API GW between caller and receiver is stripping headers |
+
+To confirm the Java process is seen by OneAgent: check **Dynatrace → Technologies → Java** and verify the process appears as a service.
 
 ---
 
@@ -180,7 +219,7 @@ The receiver keeps listening on `:9090` as the API GW backend. This lets you obs
 ├── setup.sh          # download Amazon Corretto 17 into .jdk/
 ├── build.sh          # build caller JAR using project-local JDK
 ├── run-receiver.sh   # start the echo receiver
-├── run-caller.sh     # start the caller (pass ONEAGENT_JAR and TARGET_URL)
+├── run-caller.sh     # start the caller (set ONEAGENT_JAR and TARGET_URL)
 ├── test.sh           # send a test request via curl
 ├── caller/           # Spring Boot app (Apache HttpClient 5 + wire logging)
 │   ├── mvnw
