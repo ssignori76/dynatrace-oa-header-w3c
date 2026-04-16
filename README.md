@@ -32,19 +32,25 @@ Verifica in particolare la propagazione degli header:
 ## Prerequisiti
 
 - Java 17+
-- Maven 3.8+ (solo per il caller)
+- Maven **non necessario** — il progetto include il Maven Wrapper (`mvnw`)
 - Dynatrace OneAgent installato sulla macchina del caller
 
 ---
 
 ## Build
 
+Il progetto usa il **Maven Wrapper**: scarica automaticamente la versione corretta di Maven al primo build, senza richiedere Maven installato sul sistema.
+
+La cache viene scaricata in `caller/.maven/` (cartella del progetto, non nella home utente) e non viene committata nel repo.
+
 ```bash
 cd caller
-mvn package -q
+./mvnw package -q
 ```
 
 Produce: `caller/target/caller-1.0.0.jar`
+
+> **Nota**: al primo `./mvnw` viene scaricato Maven (~10 MB). Richiede connettività internet verso `repo.maven.apache.org`.
 
 ---
 
