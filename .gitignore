@@ -3,5 +3,7 @@ target/
 .claude/
 # project-local JDK (downloaded by setup.sh)
 .jdk/
+# OTel agent (downloaded by setup-otel.sh)
+.otel/
 # Maven cache downloaded by the wrapper
 caller/.maven/
